@@ -2,7 +2,6 @@
 
 module Syntax where
 
-import Prelude hiding (showList)
 import Data.List (intersperse)
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -50,7 +49,7 @@ showTCs tcs
 instance Show FNDec where
     show (FNDec n tcs ty args body) =
         n ++ " :: " ++  showTCs tcs ++ show ty ++ "\n" ++
-        n ++ " " ++ showList " " args ++ " = " ++ show body
+        n ++ " " ++ showAList " " args ++ " = " ++ show body
 
 -- Expression datatype - function bodies
 data Exp
@@ -68,13 +67,13 @@ data Exp
 
 instance Show Exp where
     show e = case e of
-        AppF n es  -> n ++ showList " " es
+        AppF n es  -> n ++ showAList " " es
         Let n x y -> "let " ++ n ++ " = " ++ show x ++ " in " ++ show y
         Lam n x   -> "\\ " ++ n ++ " -> " ++ show x
         AppL f a  -> "(" ++ show f ++ ") " ++ show a
         Var n     -> n
         Const x   -> show x
-        Prod es   -> "(" ++ showList ", " es ++ ")"
+        Prod es   -> "(" ++ showAList ", " es ++ ")"
         Index     -> "index"
         Add       -> "(+)"
         Sub       -> "(-)"
@@ -89,7 +88,7 @@ data Type
 
 instance Show Type where
     show t = case t of
-        TProd ts  -> "(" ++ showList ", " ts ++ ")"
+        TProd ts  -> "(" ++ showAList ", " ts ++ ")"
         TFunc f a -> "(" ++ show f ++ " -> " ++ show a ++ ")"
         TInt      -> "Int"
         TVar a    -> a
@@ -107,4 +106,4 @@ instance Show Dec where
     show (FN fndec) = show fndec
 
 instance Show [Dec] where
-    show decs = showList "\n" decs
+    show decs = showAList "\n" decs

@@ -9,11 +9,17 @@ function clean() {
     rm -rf bin/
 }
 
+function repl() {
+    ghci src/*
+}
+
 case $@ in
     "build")    build ;;
     "clean")    clean ;;
+    "repl" )    repl  ;;
     *)          echo "Invalid arguments"
 esac
 
 unset -f build
 unset -f clean
+unset -f repl
