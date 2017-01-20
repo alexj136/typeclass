@@ -1,0 +1,19 @@
+#!/bin/sh
+
+function build() {
+    mkdir -p bin
+    ghc -odir bin -hidir bin src/*
+}
+
+function clean() {
+    rm -rf bin/
+}
+
+case $@ in
+    "build")    build ;;
+    "clean")    clean ;;
+    *)          echo "Invalid arguments"
+esac
+
+unset -f build
+unset -f clean
