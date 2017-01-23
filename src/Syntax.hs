@@ -59,8 +59,9 @@ data Exp
     | AppL Exp Exp
     | Var Name
     | Const Int
-    | Prod [Exp]
-    | Index
+    | Prod Exp Exp
+    | Fst
+    | Snd
     | Add
     | Sub
     deriving (Eq, Ord)
@@ -73,25 +74,34 @@ instance Show Exp where
         AppL f a  -> "(" ++ show f ++ ") " ++ show a
         Var n     -> n
         Const x   -> show x
-        Prod es   -> "(" ++ showAList ", " es ++ ")"
-        Index     -> "index"
+        Prod e f  -> "(" ++ show e ++ ", " ++ show f ++ ")"
+        Fst       -> "fst"
+        Snd       -> "snd"
         Add       -> "(+)"
         Sub       -> "(-)"
 
 -- Grammar for types
 data Type
-    = TProd [Type]
+    = TProd Type Type
     | TFunc Type Type
     | TInt
+    | TQuant Name (S.Set Name) Type
     | TVar Name
     deriving (Eq, Ord)
 
 instance Show Type where
     show t = case t of
-        TProd ts  -> "(" ++ showAList ", " ts ++ ")"
+        TProd t u -> "(" ++ show t ++  ", " ++ show u ++ ")"
         TFunc f a -> "(" ++ show f ++ " -> " ++ show a ++ ")"
         TInt      -> "Int"
         TVar a    -> a
+        TQuant n cs t | null cs   -> "∀ " ++ n ++ " . " ++ show t
+        TQuant n cs t | otherwise -> "∀ " ++ n ++ " ∈ " ++
+            showAList ", " (S.toList cs) ++ ". " ++ show t
+
+tForAll :: [Name] -> Type -> Type
+tForAll []     = id
+tForAll (a:as) = TQuant a S.empty . tForAll as
 
 -- in our language, a program is a list of declarations. A declaration is either
 -- a function declaration, a type class declaration, or a type instance
