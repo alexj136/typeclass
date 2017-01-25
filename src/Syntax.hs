@@ -53,10 +53,9 @@ instance Show FNDec where
 
 -- Expression datatype - function bodies
 data Exp
-    = AppF Name [Exp]
+    = App Exp Exp
     | Let Name {- = -} Exp {- in -} Exp
     | Lam Name Exp
-    | AppL Exp Exp
     | Var Name
     | Const Int
     | Prod Exp Exp
@@ -68,10 +67,9 @@ data Exp
 
 instance Show Exp where
     show e = case e of
-        AppF n es  -> n ++ showAList " " es
+        App f a  -> "(" ++ show f ++ ") " ++ show a
         Let n x y -> "let " ++ n ++ " = " ++ show x ++ " in " ++ show y
         Lam n x   -> "\\ " ++ n ++ " -> " ++ show x
-        AppL f a  -> "(" ++ show f ++ ") " ++ show a
         Var n     -> n
         Const x   -> show x
         Prod e f  -> "(" ++ show e ++ ", " ++ show f ++ ")"

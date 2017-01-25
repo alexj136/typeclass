@@ -41,6 +41,9 @@ env ? n = case M.lookup n env of
     Nothing -> Error $ "Env lookup failed for variable '" ++ n ++ "'"
     Just t  -> return t
 
+(+=) :: Env -> (Name, Type) -> Env
+env += (n, t) = M.insert n t env
+
 ----------------------
 -- Constraint types --
 ----------------------
@@ -63,6 +66,21 @@ constraintsFNDec = undefined
 constraintsExp :: Env -> NameGen -> Exp ->
     Result (Type, S.Set Constraint, NameGen)
 constraintsExp env gen exp = case exp of
+    App f a -> do
+        let (newName, newGen) = genName gen
+        let tyR = TVar newName
+        (tyF, conF, genAfterF) <- constraintsExp env newGen f
+        (tyA, conA, genAfterA) <- constraintsExp env genAfterF a
+        return (tyR, (tyF, TFunc tyA tyR) `S.insert` conF `S.union` conA, newGen)
+    Let n x y -> do
+        (tyX, conX, genAfterX) <- constraintsExp env gen x
+        (tyY, conY, genAfterY) <- constraintsExp (env += (n, tyX)) genAfterX y
+        return (tyY, conX `S.union` conY, genAfterY)
+    Lam n x -> do
+        let (newName, newGen) = genName gen
+        (tyX, conX, genAfterX) <-
+            constraintsExp (env += (n, TVar newName)) newGen x
+        return (TFunc (TVar newName) tyX, conX, genAfterX)
     Var x -> do
         tyX <- env ? x
         return (tyX, S.empty, gen)
