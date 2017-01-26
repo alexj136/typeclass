@@ -12,6 +12,14 @@ import Syntax
 
 type NameGen = Int
 
+genNNames :: Int -> NameGen -> ([String], NameGen)
+genNNames 0 gen = ([], gen)
+genNNames n gen = let
+    (rest   , genAfterRest) = genNNames (n - 1) gen
+    (newName, genLast     ) = genName genAfterRest
+    in
+    (newName : rest, genLast)
+
 genName :: NameGen -> (String, NameGen)
 genName g = ("__" ++ alphaFromInteger g ++ "__", g + 1)
     where
@@ -58,10 +66,26 @@ unify :: S.Set Constraint -> Result (Type -> Type)
 unify = undefined
 
 genConstraints :: Prog -> Result (S.Set Constraint)
-genConstraints = undefined
+genConstraints prog = let
+    tcDecs = getTCDecs prog
+    tiDecs = getTIDecs prog
+    fnDecs = getFNDecs prog
+    initialEnvWithTCDecFunctions =
+        undefined
+    in
+    undefined
 
-constraintsFNDec :: NameGen -> FNDec -> Result (Type, S.Set Constraint, NameGen)
-constraintsFNDec = undefined
+-- Expects itself already in the Env via a fresh type variable
+constraintsFNDec :: Env -> NameGen -> FNDec ->
+    Result (Type, S.Set Constraint, NameGen)
+constraintsFNDec env gen (FNDec n ty args body) = let
+    (argNames, newGen) = genNNames (length args) gen
+    envWithAll = M.unionWith (\_ x -> x) env $
+        M.fromList $ zip args $ map TVar argNames 
+    in do
+    tyThis <- env ? n
+    (tyBody, conBody, newerGen) <- constraintsExp envWithAll newGen body
+    return (tyThis, S.insert (ty, tyThis) conBody, newerGen)
 
 constraintsExp :: Env -> NameGen -> Exp ->
     Result (Type, S.Set Constraint, NameGen)
@@ -71,7 +95,8 @@ constraintsExp env gen exp = case exp of
         let tyR = TVar newName
         (tyF, conF, genAfterF) <- constraintsExp env newGen f
         (tyA, conA, genAfterA) <- constraintsExp env genAfterF a
-        return (tyR, (tyF, TFunc tyA tyR) `S.insert` conF `S.union` conA, newGen)
+        let conAll = (tyF, TFunc tyA tyR) `S.insert` conF `S.union` conA
+        return (tyR, conAll, newGen)
     Let n x y -> do
         (tyX, conX, genAfterX) <- constraintsExp env gen x
         (tyY, conY, genAfterY) <- constraintsExp (env += (n, tyX)) genAfterX y

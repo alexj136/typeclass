@@ -3,6 +3,7 @@
 module Syntax where
 
 import Data.List (intersperse)
+import Data.Maybe (catMaybes)
 import qualified Data.Set as S
 import qualified Data.Map as M
 
@@ -29,26 +30,15 @@ instance Show TIDec where
             (concat (intersperse " " (f : ns))) ++ " = " ++ show e ++ "\n") $
                 M.toList funcmap)
 
--- A type to represent the typeclass information in a function declaration
-type TypeClasses = S.Set (Name, Name)
-
 -- A type for functions defined in a haskell style way with a type declaration
 -- (which includes typeclasses) and a value declaration with argument names and
 -- a body.
-data FNDec = FNDec Name TypeClasses Type [Name] Exp
+data FNDec = FNDec Name Type [Name] Exp
     deriving (Eq, Ord)
 
-showTCs :: TypeClasses -> String
-showTCs tcs
-    | S.size tcs == 0 = ""
-    | S.size tcs == 1 = (map (\(c, a) -> c ++ " " ++ a) (S.toList tcs)) !! 0
-        ++ " => "
-    | otherwise       = "(" ++ ((concat . intersperse ", ")
-        (map (\(c, a) -> c ++ " " ++ a) (S.toList tcs))) ++ ") => "
-
 instance Show FNDec where
-    show (FNDec n tcs ty args body) =
-        n ++ " :: " ++  showTCs tcs ++ show ty ++ "\n" ++
+    show (FNDec n ty args body) =
+        n ++ " :: " ++ show ty ++ "\n" ++
         n ++ " " ++ showAList " " args ++ " = " ++ show body
 
 -- Expression datatype - function bodies
@@ -107,6 +97,15 @@ tForAll (a:as) = TQuant a S.empty . tForAll as
 type Prog = [Dec]
 
 data Dec = TC TCDec | TI TIDec | FN FNDec deriving (Eq, Ord)
+
+getTCDecs :: Prog -> [TCDec]
+getTCDecs = catMaybes . map (\d -> case d of { TC c -> Just c ; _ -> Nothing })
+
+getTIDecs :: Prog -> [TIDec]
+getTIDecs = catMaybes . map (\d -> case d of { TI i -> Just i ; _ -> Nothing })
+
+getFNDecs :: Prog -> [FNDec]
+getFNDecs = catMaybes . map (\d -> case d of { FN f -> Just f ; _ -> Nothing })
 
 instance Show Dec where
     show (TC tcdec) = show tcdec
