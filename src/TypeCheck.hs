@@ -44,13 +44,22 @@ genName g = ("__" ++ alphaFromInteger g ++ "__", g + 1)
 
 type Env = M.Map Name Type
 
+-- Query the type of a specific variable in an environment. Fails if the
+-- variable is not found.
 (?) :: Env -> Name -> Result Type
 env ? n = case M.lookup n env of
     Nothing -> Error $ "Env lookup failed for variable '" ++ n ++ "'"
     Just t  -> return t
 
+-- Update the binding for a (Name, Type) binding in an environment
 (+=) :: Env -> (Name, Type) -> Env
 env += (n, t) = M.insert n t env
+
+-- Convert a TCDec into an Env containing type mappings for the functions
+-- in the typeclass declaration
+envFromTCDec :: TCDec -> Env
+envFromTCDec (TCDec classN memberN funcs) =
+    M.map (TQuant memberN (S.singleton classN)) funcs
 
 ----------------------
 -- Constraint types --
@@ -65,17 +74,26 @@ type Constraint = (Type, Type)
 unify :: S.Set Constraint -> Result (Type -> Type)
 unify = undefined
 
-genConstraints :: Prog -> Result (S.Set Constraint)
-genConstraints prog = let
-    tcDecs = getTCDecs prog
-    tiDecs = getTIDecs prog
-    fnDecs = getFNDecs prog
-    initialEnvWithTCDecFunctions =
-        undefined
-    in
-    undefined
+constraintsProg :: NameGen -> Prog -> Result (Type, S.Set Constraint, NameGen)
+constraintsProg gen prog = let
 
--- Expects itself already in the Env via a fresh type variable
+    allFuncNames :: [Name]
+    allFuncNames = concat $ map M.keys $ map functions $ getTCDecs prog
+
+    duplicates :: Bool
+    duplicates = S.size (S.fromList allFuncNames) < length allFuncNames
+
+    in if duplicates then
+        Error "Conflicting function definitions in typeclass declarations"
+    else let
+
+    initialEnvFromTCDecs :: Env
+    initialEnvFromTCDecs = M.unions $ map envFromTCDec $ getTCDecs prog
+
+    in undefined
+
+-- The given function expects a binding for its own name already in the Env
+-- via a fresh type variable. constraintsProg adds this.
 constraintsFNDec :: Env -> NameGen -> FNDec ->
     Result (Type, S.Set Constraint, NameGen)
 constraintsFNDec env gen (FNDec n ty args body) = let

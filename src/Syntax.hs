@@ -12,7 +12,11 @@ import Util
 type Name = String
 
 -- A type for type class declarations: 'class X y where ... '
-data TCDec = TCDec Name Name (M.Map Name Type) deriving (Eq, Ord)
+data TCDec = TCDec
+    { className  :: Name
+    , memberName :: Name
+    , functions  :: M.Map Name Type
+    } deriving (Eq, Ord)
 
 instance Show TCDec where
     show (TCDec cname tvar funcmap) =
@@ -94,18 +98,21 @@ tForAll (a:as) = TQuant a S.empty . tForAll as
 -- in our language, a program is a list of declarations. A declaration is either
 -- a function declaration, a type class declaration, or a type instance
 -- declaration.
-type Prog = [Dec]
+type Prog = ([Dec], Exp)
 
 data Dec = TC TCDec | TI TIDec | FN FNDec deriving (Eq, Ord)
 
 getTCDecs :: Prog -> [TCDec]
-getTCDecs = catMaybes . map (\d -> case d of { TC c -> Just c ; _ -> Nothing })
+getTCDecs = getDecs (\d -> case d of { TC c -> Just c ; _ -> Nothing })
 
 getTIDecs :: Prog -> [TIDec]
-getTIDecs = catMaybes . map (\d -> case d of { TI i -> Just i ; _ -> Nothing })
+getTIDecs = getDecs (\d -> case d of { TI i -> Just i ; _ -> Nothing })
 
 getFNDecs :: Prog -> [FNDec]
-getFNDecs = catMaybes . map (\d -> case d of { FN f -> Just f ; _ -> Nothing })
+getFNDecs = getDecs (\d -> case d of { FN f -> Just f ; _ -> Nothing })
+
+getDecs :: (Dec -> Maybe a) -> (Prog -> [a])
+getDecs decSelector = catMaybes . map decSelector . fst
 
 instance Show Dec where
     show (TC tcdec) = show tcdec
