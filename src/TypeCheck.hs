@@ -90,6 +90,13 @@ constraintsProg gen prog = let
     initialEnvFromTCDecs :: Env
     initialEnvFromTCDecs = M.unions $ map envFromTCDec $ getTCDecs prog
 
+    fnDecs :: [FNDec]
+    fnDecs = getFNDecs prog
+
+    tVarNamesForFNDecs :: [Name]
+    newGen :: NameGen
+    (tVarNamesForFNDecs, newGen) = genNNames (length fnDecs) gen
+
     in undefined
 
 -- The given function expects a binding for its own name already in the Env
