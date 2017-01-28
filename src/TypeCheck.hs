@@ -77,25 +77,40 @@ unify = undefined
 constraintsProg :: NameGen -> Prog -> Result (Type, S.Set Constraint, NameGen)
 constraintsProg gen prog = let
 
-    allFuncNames :: [Name]
-    allFuncNames = concat $ map M.keys $ map functions $ getTCDecs prog
+    allInClassFuncNames :: [Name]
+    allInClassFuncNames = concat $ map M.keys $ map functions $ getTCDecs prog
 
-    duplicates :: Bool
-    duplicates = S.size (S.fromList allFuncNames) < length allFuncNames
+    hasDuplicateInClassFuncNames :: Bool
+    hasDuplicateInClassFuncNames =
+        S.size (S.fromList allInClassFuncNames) < length allInClassFuncNames
 
-    in if duplicates then
+    in if hasDuplicateInClassFuncNames then
         Error "Conflicting function definitions in typeclass declarations"
     else let
 
-    initialEnvFromTCDecs :: Env
-    initialEnvFromTCDecs = M.unions $ map envFromTCDec $ getTCDecs prog
+    envBindingsFromTCDecs :: Env
+    envBindingsFromTCDecs = M.unions $ map envFromTCDec $ getTCDecs prog
 
     fnDecs :: [FNDec]
     fnDecs = getFNDecs prog
 
-    tVarNamesForFNDecs :: [Name]
+    fnNames :: [Name]
+    fnNames = map fnName fnDecs
+
+    hasDuplicateFuncNames :: Bool
+    hasDuplicateFuncNames = S.size (S.fromList fnNames) < length fnNames
+
+    in if hasDuplicateFuncNames then
+        Error "Conflicting function definitions at top level"
+    else let
+
+    tVarNamesForFuncs :: [Name]
     newGen :: NameGen
-    (tVarNamesForFNDecs, newGen) = genNNames (length fnDecs) gen
+    (tVarNamesForFuncs, newGen) = genNNames (length fnDecs) gen
+
+    envBindingsFromFNDecs :: Env
+    envBindingsFromFNDecs =
+        M.fromList $ zip fnNames $ map TVar tVarNamesForFuncs
 
     in undefined
 

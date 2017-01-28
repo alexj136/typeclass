@@ -37,8 +37,12 @@ instance Show TIDec where
 -- A type for functions defined in a haskell style way with a type declaration
 -- (which includes typeclasses) and a value declaration with argument names and
 -- a body.
-data FNDec = FNDec Name Type [Name] Exp
-    deriving (Eq, Ord)
+data FNDec = FNDec
+    { fnName   :: Name
+    , fnType   :: Type 
+    , argNames :: [Name]
+    , body     :: Exp
+    } deriving (Eq, Ord)
 
 instance Show FNDec where
     show (FNDec n ty args body) =
