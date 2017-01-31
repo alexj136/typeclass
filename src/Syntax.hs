@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleInstances #-}  -- Allows 'instance Show [Dec] ...'
 
 module Syntax where
 
@@ -13,9 +13,9 @@ type Name = String
 
 -- A type for type class declarations: 'class X y where ... '
 data TCDec = TCDec
-    { className  :: Name
-    , memberName :: Name
-    , functions  :: M.Map Name Type
+    { classNameTC :: Name
+    , memberName  :: Name
+    , functions   :: M.Map Name Type
     } deriving (Eq, Ord)
 
 instance Show TCDec where
@@ -25,7 +25,11 @@ instance Show TCDec where
             M.toList funcmap)
 
 -- A type for type instance declarations: 'instance X Int where ... '
-data TIDec = TIDec Name Type (M.Map Name ([Name], Exp)) deriving (Eq, Ord)
+data TIDec = TIDec 
+    { classNameTI :: Name
+    , memberType  :: Type
+    , functionMap :: M.Map Name ([Name], Exp)
+    } deriving (Eq, Ord)
 
 instance Show TIDec where
     show (TIDec cname ty funcmap) =

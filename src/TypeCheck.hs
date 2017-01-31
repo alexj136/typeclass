@@ -1,7 +1,10 @@
+{-# LANGUAGE ScopedTypeVariables #-}    -- Allows type annotations on variables
+                                        -- in do-notation
 module TypeCheck where
 
 import qualified Data.Set as S
 import qualified Data.Map as M
+import Control.Monad (foldM)
 
 import Util
 import Syntax
@@ -78,7 +81,7 @@ constraintsProg :: NameGen -> Prog -> Result (Type, S.Set Constraint, NameGen)
 constraintsProg gen prog = let
 
     allInClassFuncNames :: [Name]
-    allInClassFuncNames = concat $ map M.keys $ map functions $ getTCDecs prog
+    allInClassFuncNames = concatMap (M.keys . functions) $ getTCDecs prog
 
     hasDuplicateInClassFuncNames :: Bool
     hasDuplicateInClassFuncNames =
@@ -112,12 +115,31 @@ constraintsProg gen prog = let
     envBindingsFromFNDecs =
         M.fromList $ zip fnNames $ map TVar tVarNamesForFuncs
 
-    in undefined
+    completeEnv :: Env
+    completeEnv = M.union envBindingsFromFNDecs envBindingsFromTCDecs
+
+    --tiFuncs :: [FNDec] ->
+
+    in do
+
+    constraintGenResultsForFunctions :: (S.Set Constraint, NameGen) <-
+        foldM ( \(constraintsAll, gen) fnDec -> do
+            (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
+            return (S.union constraintsAll constraintsFn, genAfter)
+        ) (S.empty, newGen) fnDecs
+
+    {-constraintGenResultsForClassWitnesses :: (S.Set Constraint, NameGen) <-
+        foldM ( \(constraintsAll, gen) fnDec -> do
+            (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
+            return (S.union constraintsAll constraintsFn, genAfter)
+        ) (S.empty, newGen) undefined
+-}
+    return (undefined, undefined, undefined)
 
 -- The given function expects a binding for its own name already in the Env
 -- via a fresh type variable. constraintsProg adds this.
 constraintsFNDec :: Env -> NameGen -> FNDec ->
-    Result (Type, S.Set Constraint, NameGen)
+    Result (S.Set Constraint, NameGen)
 constraintsFNDec env gen (FNDec n ty args body) = let
     (argNames, newGen) = genNNames (length args) gen
     envWithAll = M.unionWith (\_ x -> x) env $
@@ -125,7 +147,7 @@ constraintsFNDec env gen (FNDec n ty args body) = let
     in do
     tyThis <- env ? n
     (tyBody, conBody, newerGen) <- constraintsExp envWithAll newGen body
-    return (tyThis, S.insert (ty, tyThis) conBody, newerGen)
+    return (S.insert (ty, tyThis) conBody, newerGen)
 
 constraintsExp :: Env -> NameGen -> Exp ->
     Result (Type, S.Set Constraint, NameGen)
