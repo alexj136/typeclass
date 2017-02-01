@@ -9,54 +9,11 @@ import Control.Monad (foldM)
 import Util
 import Syntax
 
------------------------------------
--- Machinery for name generation --
------------------------------------
-
-type NameGen = Int
-
-genNNames :: Int -> NameGen -> ([String], NameGen)
-genNNames 0 gen = ([], gen)
-genNNames n gen = let
-    (rest   , genAfterRest) = genNNames (n - 1) gen
-    (newName, genLast     ) = genName genAfterRest
-    in
-    (newName : rest, genLast)
-
-genName :: NameGen -> (String, NameGen)
-genName g = ("__" ++ alphaFromInteger g ++ "__", g + 1)
-    where
-
-    -- Generate a string of lowercase alphabetic characters from an integer by
-    -- interpreting the integer in base 26 such that a 0 is a, 1 is b, etc.
-    -- Generation is in reverse order so that the leading digit changes with
-    -- addition of one, helping to distinguish variable names.
-    alphaFromInteger :: Int -> String
-    alphaFromInteger = map (\digit -> ['a'..'z'] !! digit) . digits 26
-
-    -- Get the digits of a number in a given base, in reverse order
-    digits :: Int -> Int -> [Int]
-    digits base x | x == 0 = [0]
-    digits base x | True   = ds base x where
-        ds base x | x == 0 = []
-                  | True   = (x `mod` base) : ds base (x `div` base)
-
 -----------------------
 -- Environment types --
 -----------------------
 
 type Env = M.Map Name Type
-
--- Query the type of a specific variable in an environment. Fails if the
--- variable is not found.
-(?) :: Env -> Name -> Result Type
-env ? n = case M.lookup n env of
-    Nothing -> Error $ "Env lookup failed for variable '" ++ n ++ "'"
-    Just t  -> return t
-
--- Update the binding for a (Name, Type) binding in an environment
-(+=) :: Env -> (Name, Type) -> Env
-env += (n, t) = M.insert n t env
 
 -- Convert a TCDec into an Env containing type mappings for the functions
 -- in the typeclass declaration
@@ -118,7 +75,8 @@ constraintsProg gen prog = let
     completeEnv :: Env
     completeEnv = M.union envBindingsFromFNDecs envBindingsFromTCDecs
 
-    --tiFuncs :: [FNDec] ->
+    tiFuncs :: [FNDec]
+    tiFuncs = undefined
 
     in do
 

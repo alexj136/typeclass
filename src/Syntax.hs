@@ -129,3 +129,22 @@ instance Show Dec where
 
 instance Show [Dec] where
     show decs = showAList "\n" decs
+
+tiDecsAsFuncs :: Prog -> Result [FNDec]
+tiDecsAsFuncs prog = let
+
+    classMap :: M.Map Name (Name, M.Map Name Type)
+    classMap = M.fromList $ map (\(TCDec className binder functions) ->
+        (className, (binder, functions))) $ getTCDecs prog
+
+    in sequence $ map (\(TIDec className typeInClass witnesses) -> do
+
+        (classBinder, classFnMap) <- classMap ? className
+
+        if M.keys classFnMap /= M.keys witnesses then
+            Error $ "class-instance mismatch for " ++ className ++ " and "
+                ++ show typeInClass
+        else
+            Error notImplemented
+
+        ) $ getTIDecs prog
