@@ -65,8 +65,8 @@ constraintsProg gen prog = let
     else let
 
     tVarNamesForFuncs :: [Name]
-    newGen :: NameGen
-    (tVarNamesForFuncs, newGen) = genNNames (length fnDecs) gen
+    gen' :: NameGen
+    (tVarNamesForFuncs, gen') = genNNames (length fnDecs) gen
 
     envBindingsFromFNDecs :: Env
     envBindingsFromFNDecs =
@@ -75,23 +75,17 @@ constraintsProg gen prog = let
     completeEnv :: Env
     completeEnv = M.union envBindingsFromFNDecs envBindingsFromTCDecs
 
-    tiFuncs :: [FNDec]
-    tiFuncs = undefined
-
     in do
 
-    constraintGenResultsForFunctions :: (S.Set Constraint, NameGen) <-
+    (functionConstraints, gen'') :: (S.Set Constraint, NameGen) <-
         foldM ( \(constraintsAll, gen) fnDec -> do
             (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
             return (S.union constraintsAll constraintsFn, genAfter)
-        ) (S.empty, newGen) fnDecs
+        ) (S.empty, gen') fnDecs
 
-    {-constraintGenResultsForClassWitnesses :: (S.Set Constraint, NameGen) <-
-        foldM ( \(constraintsAll, gen) fnDec -> do
-            (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
-            return (S.union constraintsAll constraintsFn, genAfter)
-        ) (S.empty, newGen) undefined
--}
+    (tiFuncs, gen''') :: ([FNDec], NameGen) <-
+        tiDecsAsFuncs prog gen''
+
     return (undefined, undefined, undefined)
 
 -- The given function expects a binding for its own name already in the Env

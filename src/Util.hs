@@ -2,6 +2,7 @@ module Util where
 
 import Data.List (intersperse)
 import Control.Monad (liftM, ap)
+import Control.Monad.Trans.State.Lazy
 import qualified Data.Map as M
 
 -- Given a function for showing an a and a delimiter, show a list of as,
@@ -46,9 +47,11 @@ kvmap ? k = case M.lookup k kvmap of
     Nothing -> Error $ "Map lookup failed for key: " ++ show k
     Just v  -> return v
 
------------------------------------
--- Machinery for name generation --
------------------------------------
+---------------------------------------------
+-- Machinery for names and name generation --
+---------------------------------------------
+
+type Name = String
 
 type NameGen = Int
 
