@@ -34,8 +34,22 @@ type Constraint = (Type, Type)
 unify :: S.Set Constraint -> Result (Type -> Type)
 unify = undefined
 
-constraintsProg :: Env -> NameGen -> Prog ->
-    Result (Type, S.Set Constraint, NameGen)
+type ConstraintGenResult a = Result (a, S.Set Constraint, NameGen)
+type ConstraintGen a b = Env -> NameGen -> a -> ConstraintGenResult b
+
+foldCG :: ConstraintGen a b -> ConstraintGen [a] [b]
+foldCG cg env gen = foldM (\(bs, constraints, gen) a -> do
+    (b, constraintsA, gen') <- cg env gen a
+    return (b : bs, S.union constraints constraintsA, gen')
+    ) ([], S.empty, gen)
+
+bindCG :: ConstraintGen a b -> ConstraintGen x y -> ConstraintGen (a, x) (b, y)
+bindCG abCGen xyCGen env nameGen (a, x) = do
+    (b, constraintsA, nameGen' ) <- abCGen env nameGen  a
+    (y, constraintsB, nameGen'') <- xyCGen env nameGen' x
+    return ((b, y), S.union constraintsA constraintsB, nameGen'')
+
+constraintsProg :: ConstraintGen Prog Type
 constraintsProg env gen prog = let
 
     allInClassFuncNames :: [Name]
@@ -78,19 +92,13 @@ constraintsProg env gen prog = let
 
     in do
 
-    (functionConstraints :: S.Set Constraint, gen'' :: NameGen) <-
-        foldM ( \(constraintsAll, gen) fnDec -> do
-            (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
-            return (S.union constraintsAll constraintsFn, genAfter)
-        ) (S.empty, gen') fnDecs
+    (_, functionConstraints :: S.Set Constraint, gen'' :: NameGen) <-
+        foldCG constraintsFNDec completeEnv gen' fnDecs
 
     (tiFuncs :: [FNDec], gen''' :: NameGen) <- tiDecsAsFuncs prog gen''
 
-    (witnessConstraints :: S.Set Constraint, gen'''' :: NameGen) <-
-        foldM ( \(constraintsAll, gen) fnDec -> do
-            (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
-            return (S.union constraintsAll constraintsFn, genAfter)
-        ) (S.empty, gen') tiFuncs
+    (_, witnessConstraints :: S.Set Constraint, gen'''' :: NameGen) <-
+        foldCG constraintsFNDec completeEnv gen''' tiFuncs
 
     (mainType :: Type, mainConstraints :: S.Set Constraint,
         gen''''' :: NameGen) <- constraintsExp completeEnv gen'''' (snd prog)
@@ -105,8 +113,7 @@ constraintsProg env gen prog = let
 
 -- The given function expects a binding for its own name already in the Env
 -- via a fresh type variable. constraintsProg adds this.
-constraintsFNDec :: Env -> NameGen -> FNDec ->
-    Result (S.Set Constraint, NameGen)
+constraintsFNDec :: ConstraintGen FNDec ()
 constraintsFNDec env gen (FNDec n ty args body) = let
     (argNames, gen') = genNNames (length args) gen
     envWithAll = M.unionWith (\_ x -> x) env $
@@ -114,7 +121,7 @@ constraintsFNDec env gen (FNDec n ty args body) = let
     in do
     tyThis <- env ? n
     (tyBody, conBody, gen'') <- constraintsExp envWithAll gen' body
-    return (S.insert (ty, tyThis) conBody, gen'')
+    return ((), S.insert (ty, tyThis) conBody, gen'')
 
 constraintsExp :: Env -> NameGen -> Exp ->
     Result (Type, S.Set Constraint, NameGen)
