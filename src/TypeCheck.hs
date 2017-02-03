@@ -34,8 +34,9 @@ type Constraint = (Type, Type)
 unify :: S.Set Constraint -> Result (Type -> Type)
 unify = undefined
 
-constraintsProg :: NameGen -> Prog -> Result (Type, S.Set Constraint, NameGen)
-constraintsProg gen prog = let
+constraintsProg :: Env -> NameGen -> Prog ->
+    Result (Type, S.Set Constraint, NameGen)
+constraintsProg env gen prog = let
 
     allInClassFuncNames :: [Name]
     allInClassFuncNames = concatMap (M.keys . functions) $ getTCDecs prog
@@ -77,29 +78,43 @@ constraintsProg gen prog = let
 
     in do
 
-    (functionConstraints, gen'') :: (S.Set Constraint, NameGen) <-
+    (functionConstraints :: S.Set Constraint, gen'' :: NameGen) <-
         foldM ( \(constraintsAll, gen) fnDec -> do
             (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
             return (S.union constraintsAll constraintsFn, genAfter)
         ) (S.empty, gen') fnDecs
 
-    (tiFuncs, gen''') :: ([FNDec], NameGen) <-
-        tiDecsAsFuncs prog gen''
+    (tiFuncs :: [FNDec], gen''' :: NameGen) <- tiDecsAsFuncs prog gen''
 
-    return (undefined, undefined, undefined)
+    (witnessConstraints :: S.Set Constraint, gen'''' :: NameGen) <-
+        foldM ( \(constraintsAll, gen) fnDec -> do
+            (constraintsFn, genAfter) <- constraintsFNDec completeEnv gen fnDec
+            return (S.union constraintsAll constraintsFn, genAfter)
+        ) (S.empty, gen') tiFuncs
+
+    (mainType :: Type, mainConstraints :: S.Set Constraint,
+        gen''''' :: NameGen) <- constraintsExp completeEnv gen'''' (snd prog)
+
+    return ( mainType
+           , S.unions [ functionConstraints
+                      , witnessConstraints
+                      , mainConstraints
+                      ]
+           , gen'''''
+           )
 
 -- The given function expects a binding for its own name already in the Env
 -- via a fresh type variable. constraintsProg adds this.
 constraintsFNDec :: Env -> NameGen -> FNDec ->
     Result (S.Set Constraint, NameGen)
 constraintsFNDec env gen (FNDec n ty args body) = let
-    (argNames, newGen) = genNNames (length args) gen
+    (argNames, gen') = genNNames (length args) gen
     envWithAll = M.unionWith (\_ x -> x) env $
         M.fromList $ zip args $ map TVar argNames 
     in do
     tyThis <- env ? n
-    (tyBody, conBody, newerGen) <- constraintsExp envWithAll newGen body
-    return (S.insert (ty, tyThis) conBody, newerGen)
+    (tyBody, conBody, gen'') <- constraintsExp envWithAll gen' body
+    return (S.insert (ty, tyThis) conBody, gen'')
 
 constraintsExp :: Env -> NameGen -> Exp ->
     Result (Type, S.Set Constraint, NameGen)

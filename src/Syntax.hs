@@ -102,6 +102,10 @@ tForAll :: [Name] -> Type -> Type
 tForAll []     = id
 tForAll (a:as) = TQuant a S.empty . tForAll as
 
+tFuncN :: [Type] -> Type
+tFuncN [t]    = t
+tFuncN (t:ts) = TFunc t $ tFuncN ts
+
 -- in our language, a program is a list of declarations. A declaration is either
 -- a function declaration, a type class declaration, or a type instance
 -- declaration.
