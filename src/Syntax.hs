@@ -106,6 +106,52 @@ tFuncN :: [Type] -> Type
 tFuncN [t]    = t
 tFuncN (t:ts) = TFunc t $ tFuncN ts
 
+frees :: Type -> S.Set Name
+frees t = case t of
+    TProd t1 t2  -> frees t1 `S.union` frees t2
+    TFunc t1 t2  -> frees t1 `S.union` frees t2
+    TInt         -> S.empty
+    TQuant x _ t -> S.delete x $ frees t
+    TVar x       -> S.singleton x
+
+-- Replace occurences of 'x' by 'arg', within the expression 'body'. Alpha
+-- converts as necessary to avoid erroneous capture of free variables in 'arg'.
+typeSubst :: Name    -- x
+          -> Type    -- arg
+          -> NameGen -- fresh name source
+          -> Type    -- body
+          -> Result (Type, NameGen)
+typeSubst x arg gen body = case body of
+    TProd t1 t2 -> do
+        (t1', gen' ) <- typeSubst x arg gen  t1
+        (t2', gen'') <- typeSubst x arg gen' t2
+        return (TProd t1' t2', gen'')
+    TFunc t1 t2 -> do
+        (t1', gen' ) <- typeSubst x arg gen  t1
+        (t2', gen'') <- typeSubst x arg gen' t2
+        return (TFunc t1' t2', gen'')
+    TInt -> return (TInt, gen)
+    TQuant x s ty | x `S.notMember` frees ty -> do
+        (ty', gen') <- typeSubst x arg gen ty
+        return (TQuant x s ty', gen')
+    TQuant x s ty | x `S.member` frees ty -> do
+        let (fresh, gen') = genName gen
+        (ty', gen'') <- typeSubst x arg gen' (dumbRename x fresh ty)
+        return (TQuant fresh s ty', gen'')
+    TVar y | x == y -> return (arg, gen)
+
+    where
+
+    -- rename all free instances of one variable name with another
+    dumbRename :: Name -> Name -> Type -> Type
+    dumbRename from to body = case body of
+        TProd t1 t2  -> TProd (dumbRename from to t1) (dumbRename from to t2)
+        TFunc t1 t2  -> TFunc (dumbRename from to t1) (dumbRename from to t2)
+        TInt         -> TInt
+        TQuant x s t | x == from -> body
+        TQuant x s t | x /= from -> TQuant x s (dumbRename from to t)
+        TVar x       -> TVar $ if x == from then to else x
+
 -- in our language, a program is a list of declarations. A declaration is either
 -- a function declaration, a type class declaration, or a type instance
 -- declaration.
@@ -145,49 +191,7 @@ tiDecsAsFuncs prog gen =
             " and " ++ show typeInClass
         else foldM (\(done, curGen) (n, (args, body)) -> do
             tyF <- classFnMap ? n
-            (newTy, newGen) <- typeSubst classBinder typeInClass tyF curGen
+            (newTy, newGen) <- typeSubst classBinder typeInClass curGen tyF
             return $ (FNDec n newTy args body : done, newGen)
             ) (done, curGen) $ M.toList witnesses
         ) ([], gen) $ getTIDecs prog
-
--- Replace occurences of 'x' by 'arg', within the expression 'body'. Alpha
--- converts as necessary to avoid erroneous capture of free variables in 'arg'.
-typeSubst :: Name -> Type -> Type -> NameGen -> Result (Type, NameGen)
-typeSubst x arg body gen = case body of
-    TProd t1 t2 -> do
-        (t1', gen' ) <- typeSubst x arg t1 gen
-        (t2', gen'') <- typeSubst x arg t2 gen'
-        return (TProd t1' t2', gen'')
-    TFunc t1 t2 -> do
-        (t1', gen' ) <- typeSubst x arg t1 gen
-        (t2', gen'') <- typeSubst x arg t2 gen'
-        return (TFunc t1' t2', gen'')
-    TInt -> return (TInt, gen)
-    TQuant x s ty | x `S.notMember` frees ty -> do
-        (ty', gen') <- typeSubst x arg ty gen
-        return (TQuant x s ty', gen')
-    TQuant x s ty | x `S.member` frees ty -> do
-        let (fresh, gen') = genName gen
-        (ty', gen'') <- typeSubst x arg (dumbRename x fresh ty) gen'
-        return (TQuant fresh s ty', gen'')
-    TVar y | x == y -> return (arg, gen)
-
-    where
-
-    frees :: Type -> S.Set Name
-    frees t = case t of
-        TProd t1 t2  -> frees t1 `S.union` frees t2
-        TFunc t1 t2  -> frees t1 `S.union` frees t2
-        TInt         -> S.empty
-        TQuant x _ t -> S.delete x $ frees t
-        TVar x       -> S.singleton x
-
-    -- rename all free instances of one variable name with another
-    dumbRename :: Name -> Name -> Type -> Type
-    dumbRename from to body = case body of
-        TProd t1 t2  -> TProd (dumbRename from to t1) (dumbRename from to t2)
-        TFunc t1 t2  -> TFunc (dumbRename from to t1) (dumbRename from to t2)
-        TInt         -> TInt
-        TQuant x s t | x == from -> body
-        TQuant x s t | x /= from -> TQuant x s (dumbRename from to t)
-        TVar x       -> TVar $ if x == from then to else x

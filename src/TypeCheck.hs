@@ -31,8 +31,47 @@ type Constraint = (Type, Type)
 -- Type checking implementation --
 ----------------------------------
 
-unify :: S.Set Constraint -> Result (Type -> Type)
-unify = undefined
+type TypeSub = NameGen -> Type -> Result (Type, NameGen)
+
+typeSubIdentity :: TypeSub
+typeSubIdentity gen t = return (t, gen)
+
+unify :: NameGen -> S.Set Constraint -> Result (TypeSub, NameGen)
+unify gen constrs = if null constrs then return (typeSubIdentity, gen) else
+    let (next, rest) = S.deleteFindMin constrs in case next of
+
+        (ty1, ty2) | ty1 == ty2 -> unify gen rest
+
+        (TVar x, ty) | S.notMember x $ frees ty -> handleVar gen x ty rest
+
+        (ty, TVar x) | S.notMember x $ frees ty -> handleVar gen x ty rest
+
+        (TFunc a1 b1, TFunc a2 b2) -> unify gen $
+            S.insert (a1, a2) $
+            S.insert (b1, b2) $ rest
+
+        (ty1, ty2) -> Error $ "Unsatisfiable type constraint found"
+
+    where
+
+        handleVar :: NameGen -> Name -> Type -> S.Set Constraint ->
+            Result (TypeSub, NameGen)
+        handleVar gen x ty rest = do
+            (subbedRest, gen') <- foldM
+                (\(cs, gen) c -> do
+                    (c', gen') <- constrSub gen x ty c
+                    return (c' : cs, gen'))
+                ([], gen)
+                (S.toList rest)
+            (unifyRest, gen'') <- unify gen' $ S.fromList subbedRest
+            return $ (unifyRest >>= (typeSubst x ty), gen'')
+
+        constrSub :: NameGen -> Name -> Type -> Constraint ->
+            Result (Constraint, NameGen)
+        constrSub gen x ty (t1, t2) = do
+            (t1', gen' ) <- typeSubst x ty gen  t1
+            (t2', gen'') <- typeSubst x ty gen' t2
+            return ((t1', t2'), gen'')
 
 type ConstraintGenResult a = Result (a, S.Set Constraint, NameGen)
 type ConstraintGen a b = Env -> NameGen -> a -> ConstraintGenResult b
