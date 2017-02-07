@@ -152,32 +152,58 @@ typeSubst x arg gen body = case body of
         TQuant x s t | x /= from -> TQuant x s (dumbRename from to t)
         TVar x       -> TVar $ if x == from then to else x
 
+-- Alpha-equivalence on types
+alp :: Type -> Type -> Maybe (M.Map Name Name)
+alp t1 t2 = case (t1, t2) of
+    (TProd a1 b1    , TProd a2 b2    ) -> (a1 `alp` a2) `combine` (b1 `alp` b2)
+    (TFunc a1 b1    , TFunc a2 b2    ) -> (a1 `alp` a2) `combine` (b1 `alp` b2)
+    (TInt           , TInt           ) -> Just $ M.empty
+    (TQuant x1 s1 t1, TQuant x2 s2 t2) -> ensure (t1 `alp` t2) s1 s2 x1 x2
+    (TVar x         , TVar y         ) -> Just $ M.singleton x y
+
+    where
+
+        combine :: Maybe (M.Map Name Name)
+                -> Maybe (M.Map Name Name)
+                -> Maybe (M.Map Name Name)
+        combine s1 s2 = do
+            m1 <- s1
+            m2 <- s2
+            let commonKeys = S.intersection (M.keysSet m1) (M.keysSet m2)
+            let agreement  = S.map (\k -> m1 M.! k == m2 M.! k) commonKeys
+            if S.member False agreement then
+                return $ M.union m1 m2
+            else
+                Nothing
+
+        ensure :: Maybe (M.Map Name Name)
+               -> S.Set Name
+               -> S.Set Name
+               -> Name
+               -> Name
+               -> Maybe (M.Map Name Name)
+        ensure s c1 c2 x1 x2 = do
+            m <- s
+            if ((M.member    x1 m && m M.! x1 == x2         ) ||
+                (M.notMember x1 m && notElem x2 (M.elems m))) &&
+                (c1 == c2) then s else Nothing
+
 -- in our language, a program is a list of declarations. A declaration is either
 -- a function declaration, a type class declaration, or a type instance
 -- declaration.
-type Prog = ([Dec], Exp)
-
-data Dec = TC TCDec | TI TIDec | FN FNDec deriving (Eq, Ord)
+newtype Prog = Prog ([TCDec], [TIDec], [FNDec], Exp)
 
 getTCDecs :: Prog -> [TCDec]
-getTCDecs = getDecs (\d -> case d of { TC c -> Just c ; _ -> Nothing })
+getTCDecs (Prog (c, _, _, _)) = c
 
 getTIDecs :: Prog -> [TIDec]
-getTIDecs = getDecs (\d -> case d of { TI i -> Just i ; _ -> Nothing })
+getTIDecs (Prog (_, i, _, _)) = i
 
 getFNDecs :: Prog -> [FNDec]
-getFNDecs = getDecs (\d -> case d of { FN f -> Just f ; _ -> Nothing })
+getFNDecs (Prog (_, _, f, _)) = f
 
-getDecs :: (Dec -> Maybe a) -> (Prog -> [a])
-getDecs decSelector = catMaybes . map decSelector . fst
-
-instance Show Dec where
-    show (TC tcdec) = show tcdec
-    show (TI tidec) = show tidec
-    show (FN fndec) = show fndec
-
-instance Show [Dec] where
-    show decs = showAList "\n" decs
+getMain :: Prog -> Exp
+getMain (Prog (_, _, _, m)) = m
 
 tiDecsAsFuncs :: Prog -> NameGen -> Result ([FNDec], NameGen)
 tiDecsAsFuncs prog gen =
