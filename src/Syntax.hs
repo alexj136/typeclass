@@ -85,7 +85,7 @@ data Type
     | TFunc Type Type
     | TInt
     | TQuant Name (S.Set Name) Type
-    | TVar Name
+    | TVar Name (S.Set Name)
     deriving (Eq, Ord)
 
 instance Show Type where
@@ -93,10 +93,15 @@ instance Show Type where
         TProd t u -> "(" ++ show t ++  ", " ++ show u ++ ")"
         TFunc f a -> "(" ++ show f ++ " -> " ++ show a ++ ")"
         TInt      -> "Int"
-        TVar a    -> a
+        TVar a cs | S.null cs -> a
+        TVar a cs | otherwise ->
+            "(" ++ a ++ " ∈ " ++ showAList ", " (S.toList cs) ++ ")"
         TQuant n cs t | null cs   -> "∀ " ++ n ++ " . " ++ show t
         TQuant n cs t | otherwise -> "∀ " ++ n ++ " ∈ " ++
             showAList ", " (S.toList cs) ++ ". " ++ show t
+
+tVar :: Name -> Type
+tVar x = TVar x S.empty
 
 tForAll :: [Name] -> Type -> Type
 tForAll []     = id
@@ -112,33 +117,35 @@ frees t = case t of
     TFunc t1 t2  -> frees t1 `S.union` frees t2
     TInt         -> S.empty
     TQuant x _ t -> S.delete x $ frees t
-    TVar x       -> S.singleton x
+    TVar x _     -> S.singleton x
 
 -- Replace occurences of 'x' by 'arg', within the expression 'body'. Alpha
 -- converts as necessary to avoid erroneous capture of free variables in 'arg'.
-typeSubst :: Name    -- x
-          -> Type    -- arg
-          -> NameGen -- fresh name source
-          -> Type    -- body
-          -> Result (Type, NameGen)
-typeSubst x arg gen body = case body of
-    TProd t1 t2 -> do
-        (t1', gen' ) <- typeSubst x arg gen  t1
-        (t2', gen'') <- typeSubst x arg gen' t2
-        return (TProd t1' t2', gen'')
-    TFunc t1 t2 -> do
-        (t1', gen' ) <- typeSubst x arg gen  t1
-        (t2', gen'') <- typeSubst x arg gen' t2
-        return (TFunc t1' t2', gen'')
-    TInt -> return (TInt, gen)
-    TQuant x s ty | x `S.notMember` frees ty -> do
-        (ty', gen') <- typeSubst x arg gen ty
-        return (TQuant x s ty', gen')
-    TQuant x s ty | x `S.member` frees ty -> do
-        let (fresh, gen') = genName gen
-        (ty', gen'') <- typeSubst x arg gen' (dumbRename x fresh ty)
-        return (TQuant fresh s ty', gen'')
-    TVar y | x == y -> return (arg, gen)
+typeSubst :: Name       -- x
+          -> S.Set Name -- type classes of x
+          -> Type       -- arg
+          -> NameGen    -- fresh name source
+          -> Type       -- body
+          -> (Type, NameGen)
+typeSubst x cs arg gen body = case body of
+    TProd t1 t2 -> let
+        (t1', gen' ) = typeSubst x cs arg gen  t1
+        (t2', gen'') = typeSubst x cs arg gen' t2
+        in (TProd t1' t2', gen'')
+    TFunc t1 t2 -> let
+        (t1', gen' ) = typeSubst x cs arg gen  t1
+        (t2', gen'') = typeSubst x cs arg gen' t2
+        in (TFunc t1' t2', gen'')
+    TInt -> (TInt, gen)
+    TQuant y s ty | y `S.notMember` frees arg -> let
+        (ty', gen') = typeSubst x cs arg gen ty
+        in (TQuant x s ty', gen')
+    TQuant y s ty | y `S.member` frees arg -> let
+        (fresh, gen') = genName gen
+        (ty', gen'')  = typeSubst x cs arg gen' (dumbRename y fresh ty)
+        in (TQuant fresh s ty', gen'')
+    TVar y _ | x == y -> (arg , gen)
+    TVar y _ | x /= y -> (body, gen)
 
     where
 
@@ -150,16 +157,20 @@ typeSubst x arg gen body = case body of
         TInt         -> TInt
         TQuant x s t | x == from -> body
         TQuant x s t | x /= from -> TQuant x s (dumbRename from to t)
-        TVar x       -> TVar $ if x == from then to else x
+        TVar x cs    -> TVar (if x == from then to else x) cs
 
 -- Alpha-equivalence on types
-alp :: Type -> Type -> Maybe (M.Map Name Name)
-alp t1 t2 = case (t1, t2) of
-    (TProd a1 b1    , TProd a2 b2    ) -> (a1 `alp` a2) `combine` (b1 `alp` b2)
-    (TFunc a1 b1    , TFunc a2 b2    ) -> (a1 `alp` a2) `combine` (b1 `alp` b2)
+alpha :: Type -> Type -> Maybe (M.Map Name Name)
+alpha t1 t2 = case (t1, t2) of
+    (TProd a1 b1    , TProd a2 b2    ) ->
+        (a1 `alpha` a2) `combine` (b1 `alpha` b2)
+    (TFunc a1 b1    , TFunc a2 b2    ) ->
+        (a1 `alpha` a2) `combine` (b1 `alpha` b2)
     (TInt           , TInt           ) -> Just $ M.empty
-    (TQuant x1 s1 t1, TQuant x2 s2 t2) -> ensure (t1 `alp` t2) s1 s2 x1 x2
-    (TVar x         , TVar y         ) -> Just $ M.singleton x y
+    (TQuant x1 s1 t1, TQuant x2 s2 t2) -> let t1AlphaT2 = t1 `alpha` t2 in
+        if noClash t1AlphaT2 x1 x2 && s1 == s2 then t1AlphaT2 else Nothing
+    (TVar x1 s1     , TVar x2 s2     ) -> 
+        if s1 == s2 then return (M.singleton x1 x2) else Nothing
 
     where
 
@@ -176,17 +187,10 @@ alp t1 t2 = case (t1, t2) of
             else
                 Nothing
 
-        ensure :: Maybe (M.Map Name Name)
-               -> S.Set Name
-               -> S.Set Name
-               -> Name
-               -> Name
-               -> Maybe (M.Map Name Name)
-        ensure s c1 c2 x1 x2 = do
-            m <- s
-            if ((M.member    x1 m && m M.! x1 == x2         ) ||
-                (M.notMember x1 m && notElem x2 (M.elems m))) &&
-                (c1 == c2) then s else Nothing
+        noClash :: Maybe (M.Map Name Name) -> Name -> Name -> Bool
+        noClash s x1 x2 = case s of { Nothing -> False; Just m ->
+            (M.member    x1 m && m M.! x1 == x2        ) ||
+            (M.notMember x1 m && notElem x2 (M.elems m))  }
 
 -- in our language, a program is a list of declarations. A declaration is either
 -- a function declaration, a type class declaration, or a type instance
@@ -217,7 +221,8 @@ tiDecsAsFuncs prog gen =
             " and " ++ show typeInClass
         else foldM (\(done, curGen) (n, (args, body)) -> do
             tyF <- classFnMap ? n
-            (newTy, newGen) <- typeSubst classBinder typeInClass curGen tyF
+            (newTy, newGen) <- return $
+                typeSubst classBinder undefined typeInClass curGen tyF
             return $ (FNDec n newTy args body : done, newGen)
             ) (done, curGen) $ M.toList witnesses
         ) ([], gen) $ getTIDecs prog

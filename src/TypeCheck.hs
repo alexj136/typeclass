@@ -6,6 +6,9 @@ import qualified Data.Set as S
 import qualified Data.Map as M
 import Control.Monad (foldM)
 
+
+import Control.Monad.Trans.State.Lazy
+
 import Util
 import Syntax
 
@@ -42,9 +45,9 @@ unify gen constrs = if null constrs then return (typeSubIdentity, gen) else
 
         (ty1, ty2) | ty1 == ty2 -> unify gen rest
 
-        (TVar x, ty) | S.notMember x $ frees ty -> handleVar gen x ty rest
+        (TVar x cs, ty) | S.notMember x $ frees ty -> handleVar gen x ty rest
 
-        (ty, TVar x) | S.notMember x $ frees ty -> handleVar gen x ty rest
+        (ty, TVar x cs) | S.notMember x $ frees ty -> handleVar gen x ty rest
 
         (TFunc a1 b1, TFunc a2 b2) -> unify gen $
             S.insert (a1, a2) $
@@ -62,25 +65,26 @@ unify gen constrs = if null constrs then return (typeSubIdentity, gen) else
 
         handleVar :: NameGen -> Name -> Type -> S.Set Constraint ->
             Result (TypeSub, NameGen)
-        handleVar gen x ty rest = do
-            (subbedRest, gen') <- foldM
-                (\(cs, gen) c -> do
-                        (c', gen') <- constrSub gen x ty c
-                        return (c' : cs, gen'))
+        handleVar gen x ty rest = let
+            (subbedRest, gen') = foldl
+                (\(cs, gen) c -> let
+                        (c', gen') = constrSub gen x ty c
+                        in (c' : cs, gen'))
                 ([], gen)
                 (S.toList rest)
-            (unifyRest, gen'') <- unify gen' $ S.fromList subbedRest
-            return $ (\gen body -> do
-                    (body', gen') <- unifyRest gen body
-                    typeSubst x ty gen' body'
-                , gen'')
+            in do
+                (unifyRest, gen'') <- unify gen' $ S.fromList subbedRest
+                return $ (\gen body -> do
+                        (body', gen') <- unifyRest gen body
+                        return $ typeSubst x undefined ty gen' body'
+                    , gen'')
 
         constrSub :: NameGen -> Name -> Type -> Constraint ->
-            Result (Constraint, NameGen)
-        constrSub gen x ty (t1, t2) = do
-            (t1', gen' ) <- typeSubst x ty gen  t1
-            (t2', gen'') <- typeSubst x ty gen' t2
-            return ((t1', t2'), gen'')
+            (Constraint, NameGen)
+        constrSub gen x ty (t1, t2) = let
+            (t1', gen' ) = typeSubst x undefined ty gen  t1
+            (t2', gen'') = typeSubst x undefined ty gen' t2
+            in ((t1', t2'), gen'')
 
 type ConstraintGenResult a = Result (a, S.Set Constraint, NameGen)
 type ConstraintGen a b = Env -> NameGen -> a -> ConstraintGenResult b
@@ -130,7 +134,7 @@ constraintsProg env gen prog = let
 
     envBindingsFromFNDecs :: Env
     envBindingsFromFNDecs =
-        M.fromList $ zip fnNames $ map TVar tVarNamesForFuncs
+        M.fromList $ zip fnNames $ map tVar tVarNamesForFuncs
 
     completeEnv :: Env
     completeEnv = M.union envBindingsFromFNDecs envBindingsFromTCDecs
@@ -162,7 +166,7 @@ constraintsFNDec :: ConstraintGen FNDec ()
 constraintsFNDec env gen (FNDec n ty args body) = let
     (argNames, gen') = genNNames (length args) gen
     envWithAll = M.unionWith (\_ x -> x) env $
-        M.fromList $ zip args $ map TVar argNames 
+        M.fromList $ zip args $ map tVar argNames 
     in do
     tyThis <- env ? n
     (tyBody, conBody, gen'') <- constraintsExp envWithAll gen' body
@@ -173,7 +177,7 @@ constraintsExp :: Env -> NameGen -> Exp ->
 constraintsExp env gen exp = case exp of
     App f a -> do
         let (newName, newGen) = genName gen
-        let tyR = TVar newName
+        let tyR = tVar newName
         (tyF, conF, genAfterF) <- constraintsExp env newGen f
         (tyA, conA, genAfterA) <- constraintsExp env genAfterF a
         let conAll = (tyF, TFunc tyA tyR) `S.insert` conF `S.union` conA
@@ -185,8 +189,8 @@ constraintsExp env gen exp = case exp of
     Lam n x -> do
         let (newName, newGen) = genName gen
         (tyX, conX, genAfterX) <-
-            constraintsExp (env += (n, TVar newName)) newGen x
-        return (TFunc (TVar newName) tyX, conX, genAfterX)
+            constraintsExp (env += (n, tVar newName)) newGen x
+        return (TFunc (tVar newName) tyX, conX, genAfterX)
     Var x -> do
         tyX <- env ? x
         return (tyX, S.empty, gen)
@@ -196,8 +200,24 @@ constraintsExp env gen exp = case exp of
         (tyF, conF, genAfterF) <- constraintsExp env genAfterE f
         return (TProd tyE tyF, conE `S.union` conF, genAfterF)
     Fst -> return (tForAll ["a", "b"] $
-        TFunc (TProd (TVar "a") (TVar "b")) $ TVar "a", S.empty, gen)
+        TFunc (TProd (tVar "a") (tVar "b")) $ tVar "a", S.empty, gen)
     Snd -> return (tForAll ["a", "b"] $
-        TFunc (TProd (TVar "a") (TVar "b")) $ TVar "b", S.empty, gen)
+        TFunc (TProd (tVar "a") (tVar "b")) $ tVar "b", S.empty, gen)
     Add -> return (TFunc TInt $ TFunc TInt TInt, S.empty, gen)
     Sub -> return (TFunc TInt $ TFunc TInt TInt, S.empty, gen)
+
+dequant :: NameGen -> Type -> (Type, NameGen)
+dequant gen ty = case ty of
+    TProd a b -> let
+        (a', gen' ) = dequant gen  a
+        (b', gen'') = dequant gen' b
+        in (TProd a' b', gen'')
+    TFunc a b -> let
+        (a', gen' ) = dequant gen  a
+        (b', gen'') = dequant gen' b
+        in (TFunc a' b', gen'')
+    TQuant x s a -> let
+        (fresh, gen') = genName gen
+        in undefined
+    TInt -> (TInt, gen)
+    TVar x cs -> (TVar x cs, gen)
