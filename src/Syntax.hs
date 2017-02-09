@@ -3,7 +3,6 @@
 module Syntax where
 
 import Data.List (intersperse)
-import Data.Maybe (catMaybes)
 import Control.Monad (foldM)
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -85,7 +84,7 @@ data Type
     | TFunc Type Type
     | TInt
     | TQuant Name (S.Set Name) Type
-    | TVar Name (S.Set Name)
+    | TVar Name
     deriving (Eq, Ord)
 
 instance Show Type where
@@ -93,21 +92,17 @@ instance Show Type where
         TProd t u -> "(" ++ show t ++  ", " ++ show u ++ ")"
         TFunc f a -> "(" ++ show f ++ " -> " ++ show a ++ ")"
         TInt      -> "Int"
-        TVar a cs | S.null cs -> a
-        TVar a cs | otherwise ->
-            "(" ++ a ++ " ∈ " ++ showAList ", " (S.toList cs) ++ ")"
+        TVar a    -> a
         TQuant n cs t | null cs   -> "∀ " ++ n ++ " . " ++ show t
         TQuant n cs t | otherwise -> "∀ " ++ n ++ " ∈ " ++
             showAList ", " (S.toList cs) ++ ". " ++ show t
-
-tVar :: Name -> Type
-tVar x = TVar x S.empty
 
 tForAll :: [Name] -> Type -> Type
 tForAll []     = id
 tForAll (a:as) = TQuant a S.empty . tForAll as
 
 tFuncN :: [Type] -> Type
+tFuncN []     = error "tFuncN undefined for empty list"
 tFuncN [t]    = t
 tFuncN (t:ts) = TFunc t $ tFuncN ts
 
@@ -117,47 +112,47 @@ frees t = case t of
     TFunc t1 t2  -> frees t1 `S.union` frees t2
     TInt         -> S.empty
     TQuant x _ t -> S.delete x $ frees t
-    TVar x _     -> S.singleton x
+    TVar x       -> S.singleton x
 
 -- Replace occurences of 'x' by 'arg', within the expression 'body'. Alpha
 -- converts as necessary to avoid erroneous capture of free variables in 'arg'.
 typeSubst :: Name       -- x
-          -> S.Set Name -- type classes of x
           -> Type       -- arg
           -> NameGen    -- fresh name source
           -> Type       -- body
           -> (Type, NameGen)
-typeSubst x cs arg gen body = case body of
+typeSubst x arg gen body = case body of
     TProd t1 t2 -> let
-        (t1', gen' ) = typeSubst x cs arg gen  t1
-        (t2', gen'') = typeSubst x cs arg gen' t2
+        (t1', gen' ) = typeSubst x arg gen  t1
+        (t2', gen'') = typeSubst x arg gen' t2
         in (TProd t1' t2', gen'')
     TFunc t1 t2 -> let
-        (t1', gen' ) = typeSubst x cs arg gen  t1
-        (t2', gen'') = typeSubst x cs arg gen' t2
+        (t1', gen' ) = typeSubst x arg gen  t1
+        (t2', gen'') = typeSubst x arg gen' t2
         in (TFunc t1' t2', gen'')
     TInt -> (TInt, gen)
-    TQuant y s ty | y `S.notMember` frees arg -> let
-        (ty', gen') = typeSubst x cs arg gen ty
-        in (TQuant x s ty', gen')
     TQuant y s ty | y `S.member` frees arg -> let
         (fresh, gen') = genName gen
-        (ty', gen'')  = typeSubst x cs arg gen' (dumbRename y fresh ty)
+        (ty', gen'')  = typeSubst x arg gen' (dumbRename y fresh ty)
         in (TQuant fresh s ty', gen'')
-    TVar y _ | x == y -> (arg , gen)
-    TVar y _ | x /= y -> (body, gen)
+    TQuant y s ty | otherwise              -> let
+        (ty', gen') = typeSubst x arg gen ty
+        in (TQuant x s ty', gen')
+    TVar y | x == y    -> (arg , gen)
+    TVar y | otherwise -> (body, gen)
 
     where
 
-    -- rename all free instances of one variable name with another
+    -- Rename all instances of one variable name with another, regardless of
+    -- whether it is free or bound.
     dumbRename :: Name -> Name -> Type -> Type
     dumbRename from to body = case body of
         TProd t1 t2  -> TProd (dumbRename from to t1) (dumbRename from to t2)
         TFunc t1 t2  -> TFunc (dumbRename from to t1) (dumbRename from to t2)
         TInt         -> TInt
         TQuant x s t | x == from -> body
-        TQuant x s t | x /= from -> TQuant x s (dumbRename from to t)
-        TVar x cs    -> TVar (if x == from then to else x) cs
+        TQuant x s t | otherwise -> TQuant x s (dumbRename from to t)
+        TVar x       -> TVar (if x == from then to else x)
 
 -- Alpha-equivalence on types
 alpha :: Type -> Type -> Maybe (M.Map Name Name)
@@ -169,8 +164,8 @@ alpha t1 t2 = case (t1, t2) of
     (TInt           , TInt           ) -> Just $ M.empty
     (TQuant x1 s1 t1, TQuant x2 s2 t2) -> let t1AlphaT2 = t1 `alpha` t2 in
         if noClash t1AlphaT2 x1 x2 && s1 == s2 then t1AlphaT2 else Nothing
-    (TVar x1 s1     , TVar x2 s2     ) -> 
-        if s1 == s2 then return (M.singleton x1 x2) else Nothing
+    (TVar x1        , TVar x2        ) -> return (M.singleton x1 x2)
+    (_              , _              ) -> Nothing
 
     where
 
@@ -209,20 +204,18 @@ getFNDecs (Prog (_, _, f, _)) = f
 getMain :: Prog -> Exp
 getMain (Prog (_, _, _, m)) = m
 
-tiDecsAsFuncs :: Prog -> NameGen -> Result ([FNDec], NameGen)
-tiDecsAsFuncs prog gen =
+tiDecsAsFuncs :: Prog -> Result [FNDec]
+tiDecsAsFuncs prog =
     let classMap :: M.Map Name (Name, M.Map Name Type)
         classMap = M.fromList $ map (\(TCDec className binder functions) ->
             (className, (binder, functions))) $ getTCDecs prog
-    in foldM (\(done, curGen) (TIDec className typeInClass witnesses) -> do
+    in foldM (\done (TIDec className typeInClass witnesses) -> do
         (classBinder, classFnMap) <- classMap ? className
         if M.keys classFnMap /= M.keys witnesses then Error $
             "class-instance mismatch for " ++ className ++
             " and " ++ show typeInClass
-        else foldM (\(done, curGen) (n, (args, body)) -> do
-            tyF <- classFnMap ? n
-            (newTy, newGen) <- return $
-                typeSubst classBinder undefined typeInClass curGen tyF
-            return $ (FNDec n newTy args body : done, newGen)
-            ) (done, curGen) $ M.toList witnesses
-        ) ([], gen) $ getTIDecs prog
+        else foldM (\done (n, (args, body)) -> do
+                tyF <- classFnMap ? n
+                return $ FNDec n tyF args body : done
+            ) done $ M.toList witnesses
+        ) [] $ getTIDecs prog
