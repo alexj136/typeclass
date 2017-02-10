@@ -84,7 +84,7 @@ data Type
     | TFunc Type Type
     | TInt
     | TQuant Name (S.Set Name) Type
-    | TVar Name
+    | TVar Name (S.Set Name)
     deriving (Eq, Ord)
 
 instance Show Type where
@@ -92,10 +92,15 @@ instance Show Type where
         TProd t u -> "(" ++ show t ++  ", " ++ show u ++ ")"
         TFunc f a -> "(" ++ show f ++ " -> " ++ show a ++ ")"
         TInt      -> "Int"
-        TVar a    -> a
+        TVar a cs | null cs   -> a
+        TVar a cs | otherwise ->
+            '(' : a ++ " ∈ " ++ showAList ", " (S.toList cs) ++ ")"
         TQuant n cs t | null cs   -> "∀ " ++ n ++ " . " ++ show t
         TQuant n cs t | otherwise -> "∀ " ++ n ++ " ∈ " ++
             showAList ", " (S.toList cs) ++ ". " ++ show t
+
+tVar :: Name -> Type
+tVar n = TVar n S.empty
 
 tForAll :: [Name] -> Type -> Type
 tForAll []     = id
@@ -112,34 +117,34 @@ frees t = case t of
     TFunc t1 t2  -> frees t1 `S.union` frees t2
     TInt         -> S.empty
     TQuant x _ t -> S.delete x $ frees t
-    TVar x       -> S.singleton x
+    TVar x _     -> S.singleton x
 
 -- Replace occurences of 'x' by 'arg', within the expression 'body'. Alpha
 -- converts as necessary to avoid erroneous capture of free variables in 'arg'.
 typeSubst :: Name       -- x
           -> Type       -- arg
-          -> NameGen    -- fresh name source
           -> Type       -- body
+          -> NameGen    -- fresh name source
           -> (Type, NameGen)
-typeSubst x arg gen body = case body of
+typeSubst x arg body gen = case body of
     TProd t1 t2 -> let
-        (t1', gen' ) = typeSubst x arg gen  t1
-        (t2', gen'') = typeSubst x arg gen' t2
+        (t1', gen' ) = typeSubst x arg t1 gen
+        (t2', gen'') = typeSubst x arg t2 gen'
         in (TProd t1' t2', gen'')
     TFunc t1 t2 -> let
-        (t1', gen' ) = typeSubst x arg gen  t1
-        (t2', gen'') = typeSubst x arg gen' t2
+        (t1', gen' ) = typeSubst x arg t1 gen
+        (t2', gen'') = typeSubst x arg t2 gen'
         in (TFunc t1' t2', gen'')
     TInt -> (TInt, gen)
     TQuant y s ty | y `S.member` frees arg -> let
         (fresh, gen') = genName gen
-        (ty', gen'')  = typeSubst x arg gen' (dumbRename y fresh ty)
+        (ty', gen'')  = typeSubst x arg (dumbRename y fresh ty) gen'
         in (TQuant fresh s ty', gen'')
     TQuant y s ty | otherwise              -> let
-        (ty', gen') = typeSubst x arg gen ty
+        (ty', gen') = typeSubst x arg ty gen
         in (TQuant x s ty', gen')
-    TVar y | x == y    -> (arg , gen)
-    TVar y | otherwise -> (body, gen)
+    TVar y _ | x == y    -> (arg , gen)
+    TVar y _ | otherwise -> (body, gen)
 
     where
 
@@ -152,7 +157,7 @@ typeSubst x arg gen body = case body of
         TInt         -> TInt
         TQuant x s t | x == from -> body
         TQuant x s t | otherwise -> TQuant x s (dumbRename from to t)
-        TVar x       -> TVar (if x == from then to else x)
+        TVar x cs    -> TVar (if x == from then to else x) cs
 
 -- Alpha-equivalence on types
 alpha :: Type -> Type -> Maybe (M.Map Name Name)
@@ -164,7 +169,7 @@ alpha t1 t2 = case (t1, t2) of
     (TInt           , TInt           ) -> Just $ M.empty
     (TQuant x1 s1 t1, TQuant x2 s2 t2) -> let t1AlphaT2 = t1 `alpha` t2 in
         if noClash t1AlphaT2 x1 x2 && s1 == s2 then t1AlphaT2 else Nothing
-    (TVar x1        , TVar x2        ) -> return (M.singleton x1 x2)
+    (TVar x1 _      , TVar x2 _      ) -> return (M.singleton x1 x2)
     (_              , _              ) -> Nothing
 
     where

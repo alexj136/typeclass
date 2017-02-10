@@ -11,7 +11,7 @@ import Syntax
 plusProg :: Prog
 plusProg = Prog
     ( [ TCDec "Plusable" "a" $ M.fromList
-          [ ("add", tFuncN [TVar "a", TVar "a", TVar"a"])
+          [ ("add", tFuncN [tVar "a", tVar "a", tVar "a"])
           ]
       ]
     , [ TIDec "Plusable" TInt $ M.fromList

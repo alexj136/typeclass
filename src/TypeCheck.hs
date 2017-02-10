@@ -44,8 +44,8 @@ unify gen constrs = if null constrs then return (typeSubIdentity, gen) else
 
         (ty1, ty2) | ty1 == ty2 -> unify gen rest
 
-        (TVar x, ty) | S.notMember x $ frees ty -> handleVar x ty gen rest
-        (ty, TVar x) | S.notMember x $ frees ty -> handleVar x ty gen rest
+        (TVar x _, ty) | S.notMember x $ frees ty -> handleVar x ty gen rest
+        (ty, TVar x _) | S.notMember x $ frees ty -> handleVar x ty gen rest
 
         (TFunc a1 b1, TFunc a2 b2) -> unify gen $
             S.insert (a1, a2) $
@@ -76,14 +76,14 @@ unify gen constrs = if null constrs then return (typeSubIdentity, gen) else
                 (unifyRest, gen'') <- unify gen' $ S.fromList subbedRest
                 return $ (\gen body -> do
                         (body', gen') <- unifyRest gen body
-                        return $ typeSubst x ty gen' body'
+                        return $ typeSubst x ty body' gen'
                     , gen'')
 
         constrSub :: NameGen -> Name -> Type -> Constraint ->
             (Constraint, NameGen)
         constrSub gen x ty (t1, t2) = let
-            (t1', gen' ) = typeSubst x ty gen  t1
-            (t2', gen'') = typeSubst x ty gen' t2
+            (t1', gen' ) = typeSubst x ty t1 gen
+            (t2', gen'') = typeSubst x ty t2 gen'
             in ((t1', t2'), gen'')
 
 type ConstraintGenResult a = Result (a, S.Set Constraint, NameGen)
@@ -134,7 +134,7 @@ constraintsProg env gen prog = let
 
     envBindingsFromFNDecs :: Env
     envBindingsFromFNDecs =
-        M.fromList $ zip fnNames $ map TVar tVarNamesForFuncs
+        M.fromList $ zip fnNames $ map tVar tVarNamesForFuncs
 
     completeEnv :: Env
     completeEnv = M.union envBindingsFromFNDecs envBindingsFromTCDecs
@@ -166,7 +166,7 @@ constraintsFNDec :: ConstraintGen FNDec ()
 constraintsFNDec env gen (FNDec n ty args body) = let
     (argNames, gen') = genNNames (length args) gen
     envWithAll = M.unionWith (\_ x -> x) env $
-        M.fromList $ zip args $ map TVar argNames 
+        M.fromList $ zip args $ map tVar argNames 
     in do
     tyThis <- env ? n
     (tyBody, conBody, gen'') <- constraintsExp envWithAll gen' body
@@ -177,7 +177,7 @@ constraintsExp :: Env -> NameGen -> Exp ->
 constraintsExp env gen exp = case exp of
     App f a -> do
         let (newName, newGen) = genName gen
-        let tyR = TVar newName
+        let tyR = tVar newName
         (tyF, conF, genAfterF) <- constraintsExp env newGen f
         (tyA, conA, genAfterA) <- constraintsExp env genAfterF a
         let conAll = (tyF, TFunc tyA tyR) `S.insert` conF `S.union` conA
@@ -189,8 +189,8 @@ constraintsExp env gen exp = case exp of
     Lam n x -> do
         let (newName, newGen) = genName gen
         (tyX, conX, genAfterX) <-
-            constraintsExp (env += (n, TVar newName)) newGen x
-        return (TFunc (TVar newName) tyX, conX, genAfterX)
+            constraintsExp (env += (n, tVar newName)) newGen x
+        return (TFunc (tVar newName) tyX, conX, genAfterX)
     Var x -> do
         tyX <- env ? x
         return (tyX, S.empty, gen)
@@ -200,8 +200,59 @@ constraintsExp env gen exp = case exp of
         (tyF, conF, genAfterF) <- constraintsExp env genAfterE f
         return (TProd tyE tyF, conE `S.union` conF, genAfterF)
     Fst -> return (tForAll ["a", "b"] $
-        TFunc (TProd (TVar "a") (TVar "b")) $ TVar "a", S.empty, gen)
+        TFunc (TProd (tVar "a") (tVar "b")) $ tVar "a", S.empty, gen)
     Snd -> return (tForAll ["a", "b"] $
-        TFunc (TProd (TVar "a") (TVar "b")) $ TVar "b", S.empty, gen)
+        TFunc (TProd (tVar "a") (tVar "b")) $ tVar "b", S.empty, gen)
     Add -> return (TFunc TInt $ TFunc TInt TInt, S.empty, gen)
     Sub -> return (TFunc TInt $ TFunc TInt TInt, S.empty, gen)
+
+dequantify :: NameGen -> Type -> (Type, NameGen)
+dequantify gen ty = case ty of
+    TProd a b -> let
+        (a', gen' ) = dequantify gen  a
+        (b', gen'') = dequantify gen' b
+        in (TProd a' b', gen'')
+    TFunc a b -> let
+        (a', gen' ) = dequantify gen  a
+        (b', gen'') = dequantify gen' b
+        in (TFunc a' b', gen'')
+    TQuant x s a -> let
+        (fresh, gen') = genName gen
+        (a', gen''  ) = typeSubst x (TVar fresh s) a gen' 
+        in dequantify gen'' a'
+    TInt -> (TInt, gen)
+    TVar x cs -> (TVar x cs, gen)
+
+{- SOME NOTES FROM 'IMPLEMENTING TYPE CLASSES' - PETERSON, JONES, SECTION 5
+
+We will separate the issues of type inference, in which each program expression is assigned a (possibly overloaded) type, and dictionary conversion, in which the program code is transformed to explicitly extract method functions from dictionaries.
+
+The use and implementation of ML style type inference is well documented and we will not repeat this here. Instead, we concentrate on the relatively minor changes that are needed to extend ML style type inference with support for type classes.
+
+As in ordinary ML typechecking, type variables and unification playa central role. Type variables are initially unbound, corresponding to 'unknown' types. As type checking proceeds, various constraints on the values that can be as-signed to type variables are exposed, for example by ensuring that the argument type of a given function is the same as the type of the value to which it is actually applied. Thett con-straints are solved by instantiating unbound type variables to more accurate types. Type classes require an additional field in each uninstantiated type variable: the context, a set (represented by a list) of classes.
+
+Unification is affected in a very simple way: when a type variable is instantiated, its class constraints must be passed on to the instantiated value. If this is another type variable, its context is augmented, using set union, by the context of the instantiated variable. When a context is passed on to a type constructor context reduction is required. Context reduction uses the instance declarations in the static type environment to propagate all class constraints to type variables.
+
+The type constructor being reduced by context reduction must be an instance of the reducing class. If not, type checking fails with an error that an attempt has been made to use an overloaded operator at a type that is not an instance of the corresponding class. If an instance declaration is found linking the data type and the class, the context of the instance declaration propagates to the type constructor arguments. This process continues until contexts have been propagated exclusively to type variables.
+
+As an example, consider the unification of 'Eq a => a', a type variable with an 'Eq' context, and the type '[Integer]'. The type variable is instantiated to [Integer]. Before context reduction, the resulting type is 'Eq [Integer] => [Integer]'. The instance declaration for class 'Eq' over the list data type exists (otherwise a type error occurs) and propagates the context 'Eq' to the argument to the list type constructor. This leads to the type 'Eq Integer => [Integer]'. Now we can see that the program must also include an instance decimation that makes 'Integer' an instance of the class 'Eq'. Assuming that this is true, and since the 'Integer' type constructor does not take any arguments, no further constraints can exist leaving only '[Integer]' as the resulting type. Note, however, that the unification would have failed if the required instance declarations were not found in the static type environment. By a similar process, unification of 'Eq a => a' and '[b]' would yield the type 'Eq b => [b]'. Here, contexts remain attached to the resulting type variables. The following code implements type variable instantiation in the presence of type classes. Each type variable has a value field which is either null (uninstantiated) or contains an instaniated type. The context field is a list of classes attached to uninstantiated type variables. The findInstanceContext function searches the static type environment for an instance with the selected class and data type. If not is found this function signals a type error. It returns a list of contexts, one for each argument to the data type. 
+
+instantiateTyvar(tyvar, type)
+	tyvar.value := type
+	propagateClasses(tyvar.context, type) 
+
+propagateClasses(classes,type)
+	if tyvar(type)
+		then type.context := union(classes,type.context)
+		else for each c in classes
+			propagateClassTycon(c,type) 
+
+propagateClassTycon(class,type)
+	s = findInstanceContext(type.tycon, class)
+	for each classSet in s, typeArg in tycon.args
+		propagateClasses(classSet, typeArg) 
+
+One other minor change to ML type inference is required. When a letrec is typechecked all variables defined by the letrec share a common context. This will be discussed in Section 8.3.
+
+It is worth emphasizing that context reduction is the only significant change to the ML type inference process neces-sary to infer correct typings for Haskell programs involving type classes. On the other hand, dictionary conversion, as described in the following section (or some similar process), must be carried out to implement overloading in the final executable version of the type checked program. 
+-}
