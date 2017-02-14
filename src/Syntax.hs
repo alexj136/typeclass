@@ -94,7 +94,7 @@ instance Show Type where
         TInt      -> "Int"
         TVar a cs | null cs   -> a
         TVar a cs | otherwise ->
-            '(' : a ++ " ∈ " ++ showAList ", " (S.toList cs) ++ ")"
+            '(' : (concat $ intersperse ", " $ map (\n -> n ++ " " ++ a) (S.toList cs)) ++ " => " ++ a ++ ")"
         TQuant n cs t | null cs   -> "∀ " ++ n ++ " . " ++ show t
         TQuant n cs t | otherwise -> "∀ " ++ n ++ " ∈ " ++
             showAList ", " (S.toList cs) ++ ". " ++ show t

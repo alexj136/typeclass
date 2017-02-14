@@ -10,7 +10,8 @@ main :: IO ()
 main = let
     result = do
         (ty, plusProgConstraints, gen) <- constraintsProg empty 0 plusProg
-        (unifyRes, gen') <- unify gen plusProgConstraints
+        classEnv <- genInstanceDecs plusProg
+        (unifyRes, gen') <- unify classEnv gen plusProgConstraints
         (ty', gen'') <- unifyRes gen' ty
         return ty'
     in do

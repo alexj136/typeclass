@@ -19,9 +19,22 @@ type Env = M.Map Name Type
 
 -- Convert a TCDec into an Env containing type mappings for the functions
 -- in the typeclass declaration
-envFromTCDec :: TCDec -> Env
-envFromTCDec (TCDec classN memberN funcs) =
-    M.map (TQuant memberN (S.singleton classN)) funcs
+envFromTCDec :: NameGen -> TCDec -> (Env, NameGen)
+envFromTCDec gen (TCDec classN memberN funcs) = let
+    (funcs', gen') =
+        foldl (\(done, gen) (n, ty) -> let
+            (ty', gen') =
+                dequantify gen (TQuant memberN (S.singleton classN) ty)
+            in ((n, ty') : done, gen')
+        ) ([], gen) $
+        M.toList funcs
+    in (M.fromList funcs', gen')
+
+envFromTCDecs :: NameGen -> [TCDec] -> (Env, NameGen)
+envFromTCDecs gen = foldl (\(env, gen) dec -> let
+    (envD, gen') = envFromTCDec gen dec
+    in (M.union env envD, gen')
+    ) (M.empty, gen)
 
 ----------------------
 -- Constraint types --
@@ -33,58 +46,82 @@ type Constraint = (Type, Type)
 -- Type checking implementation --
 ----------------------------------
 
+-- Implementation that serves the same purpose as propagateClasses from
+-- 'Implementing Type Classes - Peterson, Jones'. This implementation is simpler
+-- because we do not allow for instances of the form
+-- 'instance C t => C (M t) where' i.e. we do not allow instance contexts.
+-- The Peterson-Jones algorithm has extra machinery to handle contexts.
+propagateClasses :: S.Set (Name, Type) -> S.Set Name -> Type -> Result Type
+propagateClasses instances classes ty = case ty of
+    TVar x cs    -> return $ TVar x (S.union cs classes)
+    TQuant x s a -> Error "Implementation error - unremoved TQuant"
+    other        -> let
+        noInstanceFound :: [Name] =
+            filter (\clas -> S.notMember (clas, ty) instances) $
+            S.toList classes
+        in if null noInstanceFound then
+            return ty
+        else
+            Error $ "No instance for " ++ head noInstanceFound ++ " " ++ show ty
+
 type TypeSub = NameGen -> Type -> Result (Type, NameGen)
 
 typeSubIdentity :: TypeSub
 typeSubIdentity gen t = return (t, gen)
 
-unify :: NameGen -> S.Set Constraint -> Result (TypeSub, NameGen)
-unify gen constrs = if null constrs then return (typeSubIdentity, gen) else
-    let (next, rest) = S.deleteFindMin constrs in case traceShowId next of
+unify :: S.Set (Name, Type) -> NameGen -> S.Set Constraint
+      -> Result (TypeSub, NameGen)
+unify classEnv gen constrs =
+    if null constrs then return (typeSubIdentity, gen) else
+        let (next, rest) = S.deleteFindMin constrs in case traceShowId next of
 
-        (ty1, ty2) | ty1 == ty2 -> unify gen rest
+            (ty1, ty2) | ty1 == ty2 -> unify classEnv gen rest
 
-        (TVar x _, ty) | S.notMember x $ frees ty -> handleVar x ty gen rest
-        (ty, TVar x _) | S.notMember x $ frees ty -> handleVar x ty gen rest
+            (TVar x cs, ty) | S.notMember x $ frees ty ->
+                handleVar x cs ty classEnv gen rest
+            (ty, TVar x cs) | S.notMember x $ frees ty ->
+                handleVar x cs ty classEnv gen rest
 
-        (TFunc a1 b1, TFunc a2 b2) -> unify gen $
-            S.insert (a1, a2) $
-            S.insert (b1, b2) $ rest
+            (TFunc a1 b1, TFunc a2 b2) -> unify classEnv gen $
+                S.insert (a1, a2) $
+                S.insert (b1, b2) $ rest
 
-        (TProd a1 b1, TProd a2 b2) -> unify gen $
-            S.insert (a1, a2) $
-            S.insert (b1, b2) $ rest
+            (TProd a1 b1, TProd a2 b2) -> unify classEnv gen $
+                S.insert (a1, a2) $
+                S.insert (b1, b2) $ rest
 
-        (TQuant _ _ _, _) -> Error "Implementation error - unremoved TQuant"
-        (_, TQuant _ _ _) -> Error "Implementation error - unremoved TQuant"
+            (TQuant _ _ _, _) -> Error "Implementation error - unremoved TQuant"
+            (_, TQuant _ _ _) -> Error "Implementation error - unremoved TQuant"
 
-        (ty1, ty2) -> Error $ "Unsatisfiable type constraint found: " ++
-            show ty1 ++ " == " ++ show ty2
+            (ty1, ty2) -> Error $ "Unsatisfiable type constraint found: " ++
+                show ty1 ++ " == " ++ show ty2
 
     where
 
-        handleVar :: Name -> Type
+        handleVar :: Name -> S.Set Name -> Type -> S.Set (Name, Type)
                   -> NameGen -> S.Set Constraint -> Result (TypeSub, NameGen)
-        handleVar x ty gen rest = let
-            (subbedRest, gen') = foldl
-                (\(cs, gen) c -> let
-                        (c', gen') = constrSub gen x ty c
-                        in (c' : cs, gen'))
+        handleVar x cs ty classEnv gen rest = do
+            (subbedRest, gen') <- foldM
+                (\(done, gen) c -> do
+                    (c', gen') <- constrSub gen x cs ty classEnv c
+                    return (c' : done, gen'))
                 ([], gen)
                 (S.toList rest)
-            in do
-                (unifyRest, gen'') <- unify gen' $ S.fromList subbedRest
-                return $ (\gen body -> do
-                        (body', gen') <- unifyRest gen body
-                        return $ typeSubst x ty body' gen'
-                    , gen'')
+            (unifyRest, gen'') <- unify classEnv gen' $ S.fromList subbedRest
+            return $ (\gen body -> do
+                    (body', gen') <- unifyRest gen body
+                    return $ typeSubst x ty body' gen'
+                , gen'')
 
-        constrSub :: NameGen -> Name -> Type -> Constraint ->
-            (Constraint, NameGen)
-        constrSub gen x ty (t1, t2) = let
+        constrSub :: NameGen -> Name -> S.Set Name -> Type -> S.Set (Name, Type)
+                  -> Constraint -> Result (Constraint, NameGen)
+        constrSub gen x cs ty classEnv (t1, t2) = let
             (t1', gen' ) = typeSubst x ty t1 gen
             (t2', gen'') = typeSubst x ty t2 gen'
-            in ((t1', t2'), gen'')
+            in do
+            t1propagated <- propagateClasses classEnv cs t1'
+            t2propagated <- propagateClasses classEnv cs t2'
+            return ((t1propagated, t2propagated), gen'')
 
 type ConstraintGenResult a = Result (a, S.Set Constraint, NameGen)
 type ConstraintGen a b = Env -> NameGen -> a -> ConstraintGenResult b
@@ -113,7 +150,8 @@ constraintsProg env gen prog = let
     else let
 
     envBindingsFromTCDecs :: Env
-    envBindingsFromTCDecs = M.unions $ map envFromTCDec $ getTCDecs prog
+    gen' :: NameGen
+    (envBindingsFromTCDecs, gen') = envFromTCDecs gen $ getTCDecs prog
 
     fnDecs :: [FNDec]
     fnDecs = getFNDecs prog
@@ -129,8 +167,8 @@ constraintsProg env gen prog = let
     else let
 
     tVarNamesForFuncs :: [Name]
-    gen' :: NameGen
-    (tVarNamesForFuncs, gen') = genNNames (length fnDecs) gen
+    gen'' :: NameGen
+    (tVarNamesForFuncs, gen'') = genNNames (length fnDecs) gen'
 
     envBindingsFromFNDecs :: Env
     envBindingsFromFNDecs =
@@ -141,23 +179,23 @@ constraintsProg env gen prog = let
 
     in do
 
-    (_, functionConstraints :: S.Set Constraint, gen'' :: NameGen) <-
-        foldCG constraintsFNDec completeEnv gen' fnDecs
+    (_, functionConstraints :: S.Set Constraint, gen''' :: NameGen) <-
+        foldCG constraintsFNDec completeEnv gen'' fnDecs
 
     tiFuncs :: [FNDec] <- tiDecsAsFuncs prog
 
-    (_, witnessConstraints :: S.Set Constraint, gen''' :: NameGen) <-
-        foldCG constraintsFNDec completeEnv gen'' tiFuncs
+    (_, witnessConstraints :: S.Set Constraint, gen'''' :: NameGen) <-
+        foldCG constraintsFNDec completeEnv gen''' tiFuncs
 
     (mainType :: Type, mainConstraints :: S.Set Constraint,
-        gen'''' :: NameGen) <- constraintsExp completeEnv gen''' (getMain prog)
+        gen''''' :: NameGen) <- constraintsExp completeEnv gen'''' (getMain prog)
 
     return ( mainType
            , S.unions [ functionConstraints
                       , witnessConstraints
                       , mainConstraints
                       ]
-           , gen''''
+           , gen'''''
            )
 
 -- Generate a set of all (class name, type) instance declarations that exist in
@@ -214,16 +252,14 @@ constraintsExp env gen exp = case exp of
         (tyE, conE, genAfterE) <- constraintsExp env gen e
         (tyF, conF, genAfterF) <- constraintsExp env genAfterE f
         return (TProd tyE tyF, conE `S.union` conF, genAfterF)
-    Fst -> return
-        ( tForAll ["a", "b"] $ TFunc (TProd (tVar "a") (tVar "b")) $ tVar "a"
-        , S.empty
-        , gen
-        )
-    Snd -> return
-        ( tForAll ["a", "b"] $ TFunc (TProd (tVar "a") (tVar "b")) $ tVar "b"
-        , S.empty
-        , gen
-        )
+    Fst -> let
+        (ty, gen') = dequantify gen (
+            tForAll ["a", "b"] $ TFunc (TProd (tVar "a") (tVar "b")) $ tVar "a")
+        in return (ty, S.empty, gen')
+    Snd -> let
+        (ty, gen') = dequantify gen (
+            tForAll ["a", "b"] $ TFunc (TProd (tVar "a") (tVar "b")) $ tVar "b")
+        in return (ty, S.empty, gen')
     Add -> return (TFunc TInt $ TFunc TInt TInt, S.empty, gen)
     Sub -> return (TFunc TInt $ TFunc TInt TInt, S.empty, gen)
 
@@ -243,21 +279,3 @@ dequantify gen ty = case ty of
         in dequantify gen'' a'
     TInt -> (TInt, gen)
     TVar x cs -> (TVar x cs, gen)
-
--- Implementation that serves the same purpose as propagateClasses from
--- 'Implementing Type Classes - Peterson, Jones'. This implementation is simpler
--- because we do not allow for instances of the form
--- 'instance C t => C (M t) where' i.e. we do not allow instance contexts.
--- The Peterson-Jones algorithm has extra machinery to handle contexts.
-propagateClasses :: S.Set (Name, Type) -> S.Set Name -> Type -> Result Type
-propagateClasses instances classes ty = case ty of
-    TVar x cs    -> return $ TVar x (S.union cs classes)
-    TQuant x s a -> Error "Implementation error - unremoved TQuant"
-    other        -> let
-        noInstanceFound :: [Name] =
-            filter (\clas -> S.notMember (clas, ty) instances) $
-            S.toList classes
-        in if null noInstanceFound then
-            return ty
-        else
-            Error $ "No instance for " ++ head noInstanceFound ++ " " ++ show ty
