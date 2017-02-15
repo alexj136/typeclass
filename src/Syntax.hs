@@ -93,8 +93,8 @@ instance Show Type where
         TFunc f a -> "(" ++ show f ++ " -> " ++ show a ++ ")"
         TInt      -> "Int"
         TVar a cs | null cs   -> a
-        TVar a cs | otherwise ->
-            '(' : (concat $ intersperse ", " $ map (\n -> n ++ " " ++ a) (S.toList cs)) ++ " => " ++ a ++ ")"
+        TVar a cs | otherwise -> '(' : (concat $ intersperse ", " $
+            map (\n -> n ++ " " ++ a) (S.toList cs)) ++ " => " ++ a ++ ")"
         TQuant n cs t | null cs   -> "∀ " ++ n ++ " . " ++ show t
         TQuant n cs t | otherwise -> "∀ " ++ n ++ " ∈ " ++
             showAList ", " (S.toList cs) ++ ". " ++ show t
